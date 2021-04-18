@@ -1,0 +1,371 @@
+# Iris Flower Classification
+Sambhav Shrestha
+
+### 1. Introduction
+In this project, I try to analayze the big data from Iris flowers dataset and classify them based on their features. I will be using different machine learning models and trying to find the best machine learning model that can accurately distinguish one flower from another. First we will start by importing the libraries.
+
+### 2. Importing Required libraries
+```{r}
+# Importing Required Libraries
+library(dplyr)
+library(cowplot)
+library(caret)
+library(ggplot2)
+library(corrplot)
+library(caTools)
+library(gridExtra)
+library(lda)
+library(rpart)
+library(rpart.plot)
+library(xgboost)
+```
+
+
+### 3. Loading Data
+The iris data is pre-available in R and can be loaded with following code.
+```{r}
+#importing the iris datset
+data(iris)
+```
+
+
+### 4. Data Summary
+```{r}
+# summary of iris dataset
+summary(iris)
+# first and last rows
+head(iris)
+tail(iris)
+
+# check for any missing values
+colSums(is.na(iris))
+```
+
+From the above summary, we can see that this dataset has 5 columns, (Sepal.Length, Sepal.Width, Petal.Length, Petal.Width and Species) with first 4 being the attributes and the species column as label (setosa, versicolor, virginica) distributed equally among 150 observations. Also, there are no missing values and the four attributes are on same scale (cm), so we don't need to normalize them.
+
+
+### 5. Split the Data
+Let's prepare our training and test set by splitting the data. I chose to split the data 8:2.
+```{r}
+# split the data into training set and test set
+set.seed(100)
+split <- sample.split(iris$Species, SplitRatio = 0.8)
+train <- subset(iris, split == TRUE)
+test <- subset(iris, split == FALSE)
+dim(train)
+dim(test)
+
+# check if we have equal number of each species in training and test data.
+count(train, Species)
+count(test, Species)
+```
+
+
+### 6. Training-Data Visualization
+We will be looking at both the univariate and multivariate plots to understand each attribute and relationships between the elements in our training data
+
+#### Bar Plot
+```{r}
+qplot(x = train$Species, fill = train$Species, xlab = "Species", ylab ="count")
+```
+
+#### Box Plot
+Box plots help in visualizing the InterQuartile Range and dispersion of dataset. 
+```{r}
+par(mfrow=c(1,4))
+color <- c("red", "green", "orange", "yellow")
+for (i in 1:4) {
+  boxplot(train[, -c(5)][i], main=names(train)[i], col = color[i] )
+}
+```
+
+We can see that the sepal length and sepal width of flowers have comparatively smaller ICR than that of petals. Also, petals are more negatively skewed.
+
+Let's Compare the boxplots for each species. In order to do so, let's find the means of each attribute according to species.
+```{r}
+# table of means
+train %>% 
+  group_by(Species) %>% summarise(avg_SL = mean(Sepal.Length), avg_SW = mean(Sepal.Width), avg_PL = mean(Petal.Length), avg_PW = mean(Petal.Width))
+```
+
+we can already see some characteristics of each species. Setosa has smaller average petal length and width and bigger sepal width than other two. Virginica has the biggest sepal length, petal length and petal width in average. Let's visualize our data in multivariate box plots.
+```{r}
+featurePlot(x=train[, -c(5)], y=train[, 5], plot='box')
+```
+
+#### Scatter Plot
+scatter plot helps us identify the separation of each species visually 
+```{r}
+featurePlot(x=train[, -c(5)], y=train[, 5], plot='ellipse')
+```
+
+From the above scatter plot, the separation between Setosa and other two species is pretty visible. Versicolor and Verginica overlap each other but Verginica has higher value of attributes.
+
+#### Density Plots
+Scatterplot helps in finding the relation between different columns. We can find if there is a linear relationship between length and width of petals of each species and also calculate the density plot for each species
+```{r}
+# scatter plot between sepal length and width
+scatsepal <- train %>% ggplot(aes(x = Sepal.Length, y = Sepal.Width, shape = Species, color = Species)) + 
+  geom_point(size=2) + geom_smooth(method=lm, se = FALSE, formula = y ~ x)  + theme(legend.position = "none")
+
+# density plots
+xdensity1 <- train %>% ggplot(aes(x = Sepal.Length, fill = Species)) + geom_density(alpha = 0.5)
+ydensity1 <- train %>% ggplot(aes(x = Sepal.Width, fill = Species)) + geom_density(alpha = 0.5) + theme(legend.position = "none")
+
+# blank plot
+blankPlot <- ggplot()+ theme_void()
+
+# arranging all the plots
+grid.arrange(xdensity1, blankPlot, scatsepal, ydensity1, ncol=2, nrow=2, widths=c(3, 2), heights=c(2, 3))
+```
+
+```{r}
+# scatter plot between sepal length and width
+scatpetal <- train %>% ggplot(aes(x = Petal.Length, y = Petal.Width, shape = Species, color = Species)) + 
+  geom_point(size=2) + geom_smooth(method=lm, se = FALSE, formula = y ~ x)  + theme(legend.position = "none")
+
+# density plots
+xdensity2 <- train %>% ggplot(aes(x = Petal.Length, fill = Species)) + geom_density(alpha = 0.5)
+ydensity2 <- train %>% ggplot(aes(x = Petal.Width, fill = Species)) + geom_density(alpha = 0.5) + theme(legend.position = "none")
+
+# blank plot
+blankPlot <- ggplot()+ theme_void()
+
+# arranging all the plots
+grid.arrange(xdensity2, blankPlot, scatpetal, ydensity2, ncol=2, nrow=2, widths=c(3, 2), heights=c(2, 3))
+```
+
+From the two combined plots above, we can see that Petal plots have three separate clusters for each species while Sepal plots have overlapping clusters. Thus, it can be concluded that petals measurements have strong bearing on the model. Now, we shall build our model.
+
+#### Coorelation Plot
+```{r}
+correlation <-cor(train[,c(1:4)], method = 'pearson')
+corrplot(correlation,  number.cex = 1, method = "color", type = "lower", tl.cex=0.8, tl.col="black")
+```
+
+The correlation plot shows the strong correlation between Petal.length and Sepal.Length and Petal.width and Petal.length.
+
+
+### 7. Data Modeling
+
+we will use 10-fold cross validation to estimate accuracy. This validation splits our data into 10 parts, training in 9 and testing on 1 part.
+```{r}
+control <- trainControl(method='cv', number=10)
+metric <- 'Accuracy'
+```
+
+I will be using the following machine learning models to classify the data:
+
+* LDA
+* CART
+* KNN
+* SVM
+* Decision Tree
+* Random Forest
+* XGBoost
+
+#### a. Linear Discriminant Analysis
+The first model that I will be using is LDA (Linear Discriminant Analysis) (similar to logistic regression but for more than two variables)
+```{r}
+set.seed(123)
+lda_fit <- train(Species~., data=train, method='lda', 
+                  trControl=control, metric=metric)
+lda_fit
+```
+
+The accuracy of LDA on training set is 98% with Kappa of 0.975. Let's test it on test data
+
+```{r}
+# predicting on test data
+lda_predict <- predict(lda_fit, test)
+
+# confusion matrix
+lda_cm <- confusionMatrix(lda_predict, test$Species)
+lda_cm
+
+# keep track of all model accuracies
+Models_Accuracies <- tibble(model = "LDA", accuracy = lda_cm$overall['Accuracy'])
+```
+
+The accuracy of LDA is 96.67%
+
+
+#### b. Classification and Regression Trees (CART)
+
+```{r}
+set.seed(123)
+cart_fit <- train(Species~., data=train, method='rpart', 
+                  trControl=control, metric=metric)
+cart_fit
+```
+The best accuracy from CART Model obtained was 92.5 % on training data.
+
+```{r}
+# predicting on test data
+cart_predict <- predict(cart_fit, test)
+
+# confusion matrix
+cart_cm <- confusionMatrix(cart_predict, test$Species)
+cart_cm
+
+# keep track of all model accuracies
+Models_Accuracies <- add_row(Models_Accuracies, model = "CART", accuracy = cart_cm$overall['Accuracy'])
+```
+Again, the accuracy on test set went down to 86 % with Kappa of 0.8
+
+#### c. K-Nearest Neighbors (KNN)
+```{r}
+set.seed(123)
+knn_fit <- train(Species~., data=train, method='knn', trControl=control, metric=metric)
+knn_fit
+```
+The accuracy from KNN on training data was 99.16 % highest till now.
+
+Let's see how it performs on test data
+```{r}
+# test data
+knn_predict <- predict(knn_fit, test)
+
+# confusion matrix
+knn_cm <- confusionMatrix(knn_predict, test$Species)
+knn_cm
+
+# keep track of all model accuracies
+Models_Accuracies <- add_row(Models_Accuracies, model = "KNN", accuracy = knn_cm$overall['Accuracy'])
+
+```
+The accuracy on test set dropped to devastating 90%. It seems that the KNN overfitted the training set.
+
+#### d. Support Vector Machines (SVM)
+```{r}
+set.seed(123)
+svm_fit <- train(Species~., data=train, method='svmRadial', trControl=control, metric=metric)
+svm_fit
+```
+The accuracy from SVM Model is 97.5% on training data.
+
+```{r}
+# test data
+svm_predict <- predict(svm_fit, test)
+
+# confusion matrix
+svm_cm <- confusionMatrix(svm_predict, test$Species)
+svm_cm
+
+# keep track of all model accuracies
+Models_Accuracies <- add_row(Models_Accuracies, model = "SVM", accuracy = svm_cm$overall['Accuracy'])
+
+```
+Same as KNN, SVM also performed poorly on test set with accuracy of only 83%.
+
+
+#### e. Decision Trees
+```{r}
+tree_fit <- rpart(Species ~ ., train, control = rpart.control(minsplit = 6, minbucket = 2), method = "class")
+rpart.plot(tree_fit)
+```
+
+```{r}
+# test data
+tree_predict <- predict(tree_fit, test, type="class")
+tree_cm <- confusionMatrix(tree_predict, test$Species)
+tree_cm
+
+# keep track of all model accuracies
+Models_Accuracies <- add_row(Models_Accuracies, model = "Decision Tree", accuracy = tree_cm$overall['Accuracy'])
+```
+The accuracy from decision tree was 90%.
+
+#### f. Random Forest
+```{r}
+set.seed(123)
+rf_fit <- train(Species~., data=train, method='ranger', trControl=control, metric=metric)
+rf_fit
+```
+The random forest model got the training set accuracy of 97.5%.
+
+
+```{r}
+# Test data
+rf_predict <- predict(rf_fit, test)
+
+# Confusion matrix
+rf_cm <- confusionMatrix(rf_predict, test$Species)
+rf_cm
+
+# Keep track of all model accuracies
+Models_Accuracies <- add_row(Models_Accuracies, model = "Random Forest", accuracy = rf_cm$overall['Accuracy'])
+```
+The random forest model also didn't perform so well on test data with accuracy of only 86.67%
+
+#### g. XGBoost Model
+```{r}
+set.seed(40)
+
+#Convert class labels from factor to numeric
+labels <- train$Species
+y <- as.integer(labels) - 1
+
+# xgb fit
+xgb_fit <- xgboost(data = data.matrix(train[,-5]), 
+ label = y,
+ num_class = 3,
+ eta = 0.3,
+ gamma = 0.1,
+ max_depth = 30, 
+ nrounds = 20, 
+ objective = "multi:softprob",
+ colsample_bytree = 0.6,
+ verbose = 0,
+ nthread = 7,
+ nfold = 10,
+ prediction = TRUE,
+)
+
+xgb_fit
+```
+```{r}
+# Test data
+xgb_predict <- predict(xgb_fit, data.matrix(test[, -5]), reshape = T) %>% as.data.frame()
+colnames(xgb_predict) = levels(labels)
+
+# Use the predicted label with the highest probability
+xgb_predict$prediction = apply(xgb_predict, 1 ,function(x) colnames(xgb_predict)[which.max(x)])
+
+# Confusion matrix
+xgb_cm <- confusionMatrix(factor(xgb_predict$prediction), factor(test$Species))
+xgb_cm
+
+# Keep track of all model accuracies
+Models_Accuracies <- add_row(Models_Accuracies, model = "XGBoost", accuracy = xgb_cm$overall['Accuracy'])
+```
+XGBoose continuosly achieved 90% accuracy on test data on different hyperparameterization.
+
+### 9. Result Comparison
+
+#### Training Set Accuracy
+
+Let's compare how the model performed on training data.
+```{r}
+# Compare the results of these algorithms
+iris.results <- resamples(list(lda=lda_fit, cart=cart_fit, knn=knn_fit, svm=svm_fit, rf=rf_fit))
+
+# Table Comparison
+summary(iris.results)
+```
+```{r}
+dotplot(iris.results)
+```
+
+From the above data, we can see that KNN performed better than all the other model on training data with an average accuracy of 98.75%. The accuracy on training set may be affected by various reasons one being overfitting which performs extremely well on training data but breaks in test data. 
+
+#### Test Set Accuracy
+
+Let's compare the accuracies on our test set.
+```{r}
+arrange(Models_Accuracies, desc(accuracy))
+```
+
+
+### 10. Conclusion
+As we can see, LDA performed extremely better than most other models, followed by KNN, XGBoost and Decision Tree. The LDA encompassed all 4 variables, and so was able to reflect variance better. Although, since the dataset is too small, this could also be the reason for other models not performing better than they are supposed to. 
